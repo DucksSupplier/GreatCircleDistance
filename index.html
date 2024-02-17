@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Great Circle Distance Visualizer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.70/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        #map, #cesiumContainer { height: 400px; }
+        .container { padding: 1rem; }
+        .leaflet-control-zoom-in {padding:unset}
+        .leaflet-control-zoom-out {padding:unset}
+    </style>
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>Map Visualizer</strong></li>
+        </ul>
+        <ul>
+            <li><a href="#">Home</a></li>
+            <li><a href="#">About</a></li>
+            <li><a href="#" role="button">Contact</a></li>
+        </ul>
+    </nav>
+    <main class="container">
+        <div id="cesiumContainer"></div>
+        <div id="map"></div>
+    </main>
+    <footer class="container">
+        <small><a href="#">Privacy Policy</a> • <a href="#">Terms of Service</a></small>
+    </footer>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.70/Build/Cesium/Cesium.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://unpkg.com/leaflet.geodesic/dist/leaflet.geodesic.umd.min.js"></script>
+
+    <script>
+        // Initialize the Cesium Viewer
+        var viewer = new Cesium.Viewer('cesiumContainer', {
+            imageryProvider: new Cesium.OpenStreetMapImageryProvider({
+                url: 'https://a.tile.openstreetmap.org/'
+            }),
+            baseLayerPicker: false,
+            geocoder: false,
+            timeline: false, 
+            animation: false 
+        });
+    
+        var cesiumMarkers = [];
+        var cesiumPaths = [];
+    
+        var southWest = L.latLng(-89.98155760646617, -180),
+            northEast = L.latLng(89.99346179538875, 180);
+        var bounds = L.latLngBounds(southWest, northEast);
+
+        var map = L.map('map', {
+            center: [0, 0],
+            zoom: 2,
+            minZoom: 2,
+            maxBounds: bounds,
+            maxBoundsViscosity: 1.0,
+            WorldCopyJump: true
+        });
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            noWrap: true
+        }).addTo(map);
+    
+        var markers = []; // Leaflet markers
+        var polyline = null;
+    
+        // Function to add a marker to the Cesium globe
+        function addCesiumMarker(lat, lon) {
+            var marker = viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(lon, lat),
+                point: {
+                    pixelSize: 10,
+                    color: Cesium.Color.RED,
+                }
+            });
+            cesiumMarkers.push(marker);
+        }
+    
+        // Function to draw a path on the Cesium globe
+        function drawCesiumPath() {
+        // Clear existing paths
+        cesiumPaths.forEach(path => viewer.entities.remove(path));
+        cesiumPaths = [];
+
+        if (cesiumMarkers.length >= 2) {
+            var positions = cesiumMarkers.map(marker => marker.position.getValue(Cesium.JulianDate.now()));
+            var path = viewer.entities.add({
+                polyline: {
+                    positions: positions,
+                    width: 2,
+                    material: Cesium.Color.BLUE,
+                    arcType: Cesium.ArcType.GEODESIC // This ensures the shortest path over the globe
+                }
+            });
+            cesiumPaths.push(path);
+        }
+        }
+    
+        // Sync function: Updates the Leaflet map based on Cesium globe interactions
+        function syncWithLeafletMap(lat, lon) {
+            if (markers.length >= 2) {
+                map.removeLayer(markers.shift());
+            }
+    
+            var newMarker = L.marker([lat, lon], { draggable: true }).addTo(map);
+            markers.push(newMarker);
+    
+            newMarker.on('dragend', updatePolylineAndGlobe);
+            updatePolylineAndGlobe();
+        }
+    
+        function updatePolylineAndGlobe() {
+        if (polyline) map.removeLayer(polyline);
+        if (markers.length >= 2) {
+            // Draw a geodesic line on the Leaflet map
+            polyline = L.geodesic([[markers[0].getLatLng(), markers[1].getLatLng()]], {
+                weight: 2,
+                color: 'blue',
+                steps: 50 // Adjust the steps for smoother curves
+            }).addTo(map);
+        }
+
+        drawCesiumPath(); // Ensure the Cesium globe is updated as well
+        syncCesiumGlobe(); // Reflect changes from Leaflet to Cesium
+        }
+    
+        // Reflect Leaflet map markers on the Cesium globe
+        function syncCesiumGlobe() {
+            viewer.entities.removeAll();
+            cesiumMarkers = [];
+            markers.forEach(marker => addCesiumMarker(marker.getLatLng().lat, marker.getLatLng().lng));
+            drawCesiumPath();
+        }
+    
+        // Leaflet map click event
+        map.on('click', function(e) {
+            if (markers.length >= 2) {
+                map.removeLayer(markers.shift());
+                if (polyline) map.removeLayer(polyline);
+            }
+    
+            var marker = L.marker(e.latlng, { draggable: true }).addTo(map);
+            markers.push(marker);
+    
+            marker.on('dragend', updatePolylineAndGlobe);
+            updatePolylineAndGlobe();
+        });
+    
+        // Cesium globe click event
+        var handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+        handler.setInputAction(function (click) {
+            var ellipsoid = viewer.scene.globe.ellipsoid;
+            var cartesian = viewer.camera.pickEllipsoid(click.position, ellipsoid);
+            if (cartesian) {
+                var cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+                var lat = Cesium.Math.toDegrees(cartographic.latitude);
+                var lon = Cesium.Math.toDegrees(cartographic.longitude);
+    
+                addCesiumMarker(lat, lon);
+                syncWithLeafletMap(lat, lon);
+            }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    </script>
+</body>
+</html>
